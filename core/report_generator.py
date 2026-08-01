@@ -8,21 +8,14 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     @staticmethod
     def generate_report(data: List[Dict], output_folder: str, base_name: str = "Rename_Report") -> bool:
-        """
-        Generate Excel, CSV, TXT reports.
-        data: list of dicts with keys: old_name, sku, barcode, new_name, status
-        """
         try:
             output_path = Path(output_folder)
             output_path.mkdir(parents=True, exist_ok=True)
             df = pd.DataFrame(data)
-            # Excel
             excel_path = output_path / f"{base_name}.xlsx"
             df.to_excel(excel_path, index=False)
-            # CSV
             csv_path = output_path / f"{base_name}.csv"
             df.to_csv(csv_path, index=False)
-            # TXT
             txt_path = output_path / f"{base_name}.txt"
             with open(txt_path, 'w', encoding='utf-8') as f:
                 f.write("RENAME REPORT\n")

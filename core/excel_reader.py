@@ -2,137 +2,170 @@
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 class ExcelReader:
+    SUPPORTED_EXTENSIONS = ['.xlsx', '.xls', '.xlsm', '.csv', '.tsv', '.ods']
+
     @staticmethod
-    def read_excel(file_path: str) -> Optional[pd.DataFrame]:
+    def read_excel(file_path: str, sheet_name: Optional[str] = None) -> Optional[pd.DataFrame]:
         try:
-            if file_path.endswith('.csv'):
-                df = pd.read_csv(file_path)
+            ext = Path(file_path).suffix.lower()
+            if ext == '.csv':
+                # Try common encodings
+                for enc in ['utf-8-sig', 'utf-8', 'cp1252', 'latin1']:
+                    try:
+                        df = pd.read_csv(file_path, encoding=enc, dtype=str, keep_default_na=False)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
+            elif ext == '.tsv':
+                df = pd.read_csv(file_path, sep='\t', dtype=str, keep_default_na=False)
+            elif ext == '.ods':
+                try:
+                    import odfpy  # noqa
+                    df = pd.read_excel(file_path, engine='odf', sheet_name=sheet_name, dtype=str, keep_default_na=False)
+                except:
+                    df = pd.read_excel(file_path, engine='openpyxl', sheet_name=sheet_name, dtype=str, keep_default_na=False)
             else:
-                df = pd.read_excel(file_path)
+                df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=str, keep_default_na=False)
+            df = df.fillna('')
             return df
         except Exception as e:
             logger.error(f"Excel read failed: {e}")
             return None
 
     @staticmethod
+    def get_sheet_names(file_path: str) -> List[str]:
+        try:
+            sheets = pd.read_excel(file_path, sheet_name=None, nrows=0)
+            return list(sheets.keys())
+        except:
+            return []
+
+    @staticmethod
     def _clean_header(header: str) -> str:
-        """Remove leading/trailing special characters, spaces, underscores, hyphens, dots, brackets, parentheses, etc."""
         if not isinstance(header, str):
             return ''
-        # Remove leading/trailing whitespace and newlines
         header = header.strip()
-        # Remove leading/trailing punctuation like *, ., -, _, etc.
-        header = re.sub(r'^[\*\s\.\-_\(\)\[\]\{\}]+', '', header)
-        header = re.sub(r'[\*\s\.\-_\(\)\[\]\{\}]+$', '', header)
-        # Remove internal dots, underscores, hyphens (optional? but we will keep them for matching? We'll remove all non-alphanumeric for normalization)
-        # For detection, we just clean and uppercase
+        header = re.sub(r'^[\*\s\.\-_\(\)\[\]\{\}/\\]+', '', header)
+        header = re.sub(r'[\*\s\.\-_\(\)\[\]\{\}/\\]+$', '', header)
         header = re.sub(r'[^A-Za-z0-9]', '', header)
         return header.upper()
 
     @staticmethod
-    def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
-        """
-        Auto-detect SKU and Barcode columns from a wide range of possible headers,
-        ignoring leading special characters (*, etc.) and normalizing.
-        """
-        columns = {}
-        # Clean and normalize column names
-        cleaned_headers = {}
-        for col in df.columns:
-            cleaned = ExcelReader._clean_header(str(col))
-            cleaned_headers[col] = cleaned
+    def _normalize_header(header: str) -> str:
+        return ExcelReader._clean_header(header)
 
-        # Define keyword lists (all uppercase, cleaned)
+    @staticmethod
+    def detect_columns(df: pd.DataFrame) -> Dict[str, str]:
+        cleaned = {col: ExcelReader._normalize_header(str(col)) for col in df.columns}
         sku_keywords = [
-            'SKU', 'PRODUCTSKU', 'SELLERSKU', 'MERCHANTSKU', 'ITEMCODE',
-            'PRODUCTCODE', 'CODE', 'MODEL', 'STOCKCODE', 'REFERENCE'
+            'SKU', 'SKUCODE', 'PRODUCTSKU', 'MERCHANTSKU', 'SELLERSKU',
+            'ITEMCODE', 'PRODUCTCODE', 'CODE', 'MODEL', 'REFERENCE',
+            'PRODUCTREFERENCE', 'STOCKCODE', 'VENDORSKU', 'MASTERSKU', 'ITEMSKU'
         ]
         barcode_keywords = [
-            'BARCODE', 'EAN', 'UPC', 'GTIN', 'EAN13', 'EAN8',
-            'PRODUCTBARCODE', 'BARCODENO', 'BARCODENUMBER'
+            'BARCODE', 'EAN', 'EAN13', 'UPC', 'GTIN', 'PRODUCTBARCODE',
+            'BARCODENUMBER', 'BARCODENO', 'BARCODEID'
         ]
-
-        # First pass: find columns by keyword
+        name_keywords = [
+            'PRODUCTNAME', 'NAME', 'TITLE', 'NAMEENGLISH', 'PRODUCTTITLE',
+            'DESCRIPTION', 'ITEMNAME', 'PRODUCT'
+        ]
         sku_col = None
         barcode_col = None
-        for col, clean in cleaned_headers.items():
-            if not sku_col:
-                for kw in sku_keywords:
-                    if clean == kw or clean.startswith(kw):
-                        sku_col = col
-                        break
-            if not barcode_col:
-                for kw in barcode_keywords:
-                    if clean == kw or clean.startswith(kw):
-                        barcode_col = col
-                        break
-            if sku_col and barcode_col:
-                break
-
-        # If not found, use heuristics: first column that looks like SKU (alphanumeric with letters)
+        name_col = None
+        for col, norm in cleaned.items():
+            if not sku_col and norm in sku_keywords:
+                sku_col = col
+            if not barcode_col and norm in barcode_keywords:
+                barcode_col = col
+            if not name_col and norm in name_keywords:
+                name_col = col
         if not sku_col:
-            for col in df.columns:
-                # Check if column contains values with letters and digits
-                sample = df[col].dropna().astype(str).head(20)
-                # Check if more than 80% of values have at least one letter
-                letter_count = sum(1 for v in sample if re.search(r'[A-Za-z]', v))
-                if len(sample) > 0 and letter_count / len(sample) >= 0.8:
+            for col, norm in cleaned.items():
+                if any(kw in norm for kw in sku_keywords):
                     sku_col = col
                     break
-            if sku_col:
-                logger.info(f"Heuristic SKU column: {sku_col}")
-
         if not barcode_col:
-            # Look for column with mostly numeric values
+            for col, norm in cleaned.items():
+                if any(kw in norm for kw in barcode_keywords):
+                    barcode_col = col
+                    break
+        if not name_col:
+            for col, norm in cleaned.items():
+                if any(kw in norm for kw in name_keywords):
+                    name_col = col
+                    break
+        # Heuristics
+        if not sku_col:
+            for col in df.columns:
+                sample = df[col].astype(str).head(50).tolist()
+                if not sample:
+                    continue
+                letter_count = sum(1 for v in sample if re.search(r'[A-Za-z]', v))
+                if letter_count / len(sample) >= 0.7:
+                    sku_col = col
+                    break
+        if not barcode_col:
             for col in df.columns:
                 if col == sku_col:
                     continue
-                sample = df[col].dropna().astype(str).head(20)
+                sample = df[col].astype(str).head(50).tolist()
+                if not sample:
+                    continue
                 digit_count = sum(1 for v in sample if re.match(r'^\d+$', v))
-                if len(sample) > 0 and digit_count / len(sample) >= 0.9:
+                if digit_count / len(sample) >= 0.8:
                     barcode_col = col
                     break
-            if barcode_col:
-                logger.info(f"Heuristic Barcode column: {barcode_col}")
-
-        # Fallback: use first two columns
-        if not sku_col and len(df.columns) >= 1:
-            sku_col = df.columns[0]
-            logger.warning(f"Fallback SKU column: {sku_col}")
-        if not barcode_col and len(df.columns) >= 2:
-            barcode_col = df.columns[1]
-            logger.warning(f"Fallback Barcode column: {barcode_col}")
-
-        columns['sku'] = sku_col
-        columns['barcode'] = barcode_col
-        columns['cleaned_headers'] = cleaned_headers  # for debug
-
-        logger.info(f"Detected columns: SKU='{sku_col}', Barcode='{barcode_col}'")
-        # Log normalized headers
-        for col, clean in cleaned_headers.items():
-            logger.debug(f"Original: '{col}' -> Cleaned: '{clean}'")
-
-        return columns
+        return {
+            'sku': sku_col,
+            'barcode': barcode_col,
+            'name': name_col,
+            'cleaned_headers': cleaned
+        }
 
     @staticmethod
     def validate_sku_column(df: pd.DataFrame, sku_col: str) -> bool:
-        """Validate that SKU column contains alphanumeric with alphabetic prefix, not mostly numeric."""
-        sample = df[sku_col].dropna().astype(str).head(50)
+        if sku_col not in df.columns:
+            return False
+        sample = df[sku_col].astype(str).dropna().head(50).tolist()
+        if not sample:
+            return False
+        has_letter = sum(1 for v in sample if re.search(r'[A-Za-z]', v))
+        is_numeric = sum(1 for v in sample if re.match(r'^\d+$', v))
         if len(sample) == 0:
             return False
-        # Count rows that contain at least one letter
-        has_letter = sum(1 for v in sample if re.search(r'[A-Za-z]', v))
-        # Also check that not more than 90% are purely numeric
-        is_numeric = sum(1 for v in sample if re.match(r'^\d+$', v))
-        # If more than 90% are purely numeric, reject
-        if len(sample) > 0 and is_numeric / len(sample) > 0.9:
+        if is_numeric / len(sample) > 0.9:
             return False
-        # If less than 80% have a letter, maybe it's not SKU
-        if has_letter / len(sample) < 0.8:
+        if has_letter / len(sample) < 0.7:
             return False
         return True
+
+    @staticmethod
+    def validate_barcode_column(df: pd.DataFrame, barcode_col: str) -> bool:
+        if barcode_col not in df.columns:
+            return False
+        sample = df[barcode_col].astype(str).dropna().head(50).tolist()
+        if not sample:
+            return False
+        digit_count = sum(1 for v in sample if re.match(r'^\d+$', v))
+        if len(sample) == 0:
+            return False
+        return digit_count / len(sample) >= 0.8
+
+    @staticmethod
+    def apply_mapping(df: pd.DataFrame, mapping: Dict[str, str]) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        new_df = df.copy()
+        used = {}
+        for target, source in mapping.items():
+            if source in df.columns:
+                used[target] = source
+                new_df.rename(columns={source: target}, inplace=True)
+        return new_df, used

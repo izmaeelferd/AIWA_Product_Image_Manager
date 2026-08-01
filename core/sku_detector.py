@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 class SKUDetector:
     @staticmethod
     def normalize_sku(sku: str) -> str:
-        """Normalize SKU: remove all non-alphanumeric, uppercase."""
         if not sku:
             return ''
         sku = re.sub(r'[^A-Za-z0-9]', '', sku)
@@ -16,13 +15,11 @@ class SKUDetector:
 
     @staticmethod
     def extract_sku(filename: str) -> Optional[str]:
-        """
-        Extract raw SKU from filename (e.g., 'AW-1011-1.jpeg' -> 'AW-1011').
-        Handles parentheses, brackets, spaces, and any alphabetical prefix.
-        """
         name = Path(filename).stem
+        # Remove trailing parenthetical numbers
         name = re.sub(r'\s*\([^)]*\)$', '', name)
         name = name.replace(' ', '').replace('[', '').replace(']', '')
+        # Try to match pattern: letters + optional separator + digits
         match = re.match(r'^([A-Za-z]+[-_]?\d+)', name)
         if match:
             return match.group(1)
@@ -33,7 +30,6 @@ class SKUDetector:
 
     @staticmethod
     def extract_order_number(filename: str) -> int:
-        """Extract image order number from filename, default 1."""
         name = Path(filename).stem
         sku = SKUDetector.extract_sku(name)
         if sku:

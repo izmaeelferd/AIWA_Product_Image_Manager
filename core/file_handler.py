@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 class FileHandler:
     @staticmethod
     def extract_archive(archive_path: str, extract_to: str) -> bool:
-        """Extract ZIP, RAR, 7z archives."""
         try:
             extract_to = Path(extract_to)
             extract_to.mkdir(parents=True, exist_ok=True)
@@ -36,10 +35,6 @@ class FileHandler:
 
     @staticmethod
     def list_files(directory: str, extensions: List[str] = None, recursive: bool = True) -> List[str]:
-        """
-        List files in directory, optionally recursive.
-        extensions: list of extensions without dot, e.g., ['jpg', 'png']
-        """
         try:
             path = Path(directory)
             if not path.exists():
@@ -79,19 +74,6 @@ class FileHandler:
             return True
         except Exception as e:
             logger.error(f"Copy failed: {e}")
-            return False
-
-    @staticmethod
-    def move_file(src: str, dst: str, overwrite: bool = False) -> bool:
-        try:
-            dst_path = Path(dst)
-            if dst_path.exists() and not overwrite:
-                return False
-            dst_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(src, dst)
-            return True
-        except Exception as e:
-            logger.error(f"Move failed: {e}")
             return False
 
     @staticmethod
