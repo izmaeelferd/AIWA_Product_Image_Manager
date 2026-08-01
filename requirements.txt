@@ -1,0 +1,12 @@
+customtkinter
+pandas
+openpyxl
+Pillow
+opencv-python
+numpy
+tkinterdnd2
+py7zr
+rarfile
+pyinstaller
+watchdog
+darkdetect
